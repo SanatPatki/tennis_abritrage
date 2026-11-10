@@ -279,6 +279,8 @@ class OddsProvider(Protocol):
 
 ## 5. Event matching (the hardest part)
 
+> Implementation notes: `docs/event-matching.md`. Code: `src/match/linker.py`.
+
 Every trade depends on correctly linking: Kalshi market ↔ odds fixture ↔ (later) result.
 
 Normalization (`match/normalize.py`):

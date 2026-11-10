@@ -62,7 +62,7 @@ docker/
 | Phase | Status |
 |---|---|
 | 1. Data + Stage A calibration | Done for ATP 2020–2025 (report in `src/backtest/reports/`); WTA + 2015–2019 pending tennis-data downloads |
-| 2. Fair value + matching | De-vig implemented; linker not started |
+| 2. Fair value + matching | De-vig + linker implemented ([docs](docs/event-matching.md)); needs API adapters, aliases file, and 200-match accuracy check |
 | 3. Paper trading | Not started |
 | 4. Live small | Not started — requires go-live gate in AGENTS.md §11 |
 
