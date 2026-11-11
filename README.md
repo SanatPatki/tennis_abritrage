@@ -1,79 +1,83 @@
-# Tennis Prediction-Market Trading Bot
+# Tennis Arbitrage Bot
 
-Buys/sells Kalshi tennis match-winner contracts when the Kalshi price differs
-from Pinnacle's de-vigged probability by more than fees + buffer.
+Trades Kalshi tennis markets against Pinnacle's odds. When Kalshi's price
+differs from Pinnacle's de-vigged probability by more than fees + buffer,
+it buys the underpriced side.
 
-- **Venue:** Kalshi only for v1 (`KXATPMATCH`, `KXWTAMATCH`). Polymarket US is v2.
-- **Pre-match only.** Post-only maker orders by default. `MODE=paper` by default.
-- **Main metric:** closing-line value (CLV), not P&L.
-- **Operating manual:** see [AGENTS.md](AGENTS.md) — read it before writing code.
+> **Status: paper trading only.** `MODE=paper` is the default and live
+> trading is hard-gated behind two env flags. See [Safety](#safety).
 
-## Strategy
+## How it works
 
-Pinnacle's tennis closing line is treated as the best public estimate of match
-probability. Kalshi prices lag line moves and show a favorite–longshot bias.
-A trade fires when `edge = fair_p − price − fee` exceeds the maker/taker
-thresholds in `config.yaml` and all filters pass (odds freshness, match-link
-confidence, price band, time-to-start, risk limits).
+```
+Pinnacle odds ──► de-vig ──► fair probability
+                              │
+Kalshi order book ──► best bid/ask ──► edge = fair_p − price − fee
+                              │
+                    edge ≥ threshold? ──► risk checks ──► paper/live order
+```
 
-## Setup
+- **Pre-match only** — all orders cancelled before match start
+- **Maker-first** — post-only limit orders; taker only on large edge
+- **Main metric** — closing-line value (CLV), not raw P&L
+
+## Quickstart
 
 ```bash
-python3.11 -m venv .venv
-.venv/bin/pip install -e ".[dev]"
-cp .env.example .env   # fill in keys; MODE stays paper
+# 1. Python 3.11+ venv
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+
+# 2. Env (already created locally; copy .env.example for reference)
+cp .env.example .env   # fill in keys when you have them
+
+# 3. Postgres (or: docker compose -f docker/docker-compose.yml up -d)
+brew services start postgresql@16   # already installed on this machine
+
+# 4. Check config — prints what's missing
+python -m src.config
+
+# 5. Tests
+pytest -q
 ```
 
-Postgres + app via docker:
+## Repo map
 
-```bash
-docker compose -f docker/docker-compose.yml up -d
-```
+| Path | What it does |
+|---|---|
+| `config.yaml` | All strategy/risk params — no secrets |
+| `src/clients/` | Kalshi REST client (signing done), WS stub, odds provider stub |
+| `src/data/` | tennis-data.co.uk + Sackmann CSV loaders |
+| `src/match/` | Name normalization + event linker → `docs/event-matching.md` |
+| `src/model/` | De-vig methods, surface Elo |
+| `src/strategy/` | Edge signal, maker quoting, Kelly sizing |
+| `src/exec/` | `paper.py` fill simulator · `live.py` env-gated |
+| `src/risk/` | Pre-trade limits, kill switch, reconciliation |
+| `src/db/` | Postgres schema + migrations + repository |
+| `src/backtest/` | Stage A calibration (done) · Stage B replay |
+| `src/main.py` | APScheduler entrypoint — all §12 jobs registered |
+| `tests/` | 40+ unit/integration tests, no real network calls |
+| `AGENTS.md` | **Operating manual — read before changing anything** |
 
-## Layout
-
-```
-config.yaml            strategy + risk params (no secrets)
-src/clients/           Kalshi REST/WS, odds provider, Polymarket US (stub)
-src/data/              tennis-data.co.uk + Sackmann loaders
-src/match/             name normalization + event linker
-src/model/             de-vig, surface Elo
-src/strategy/          signal, quoting, sizing
-src/exec/              live (env-gated) / paper executors
-src/risk/              limits, kill switch, reconciliation
-src/db/                schema.sql + migrations
-src/backtest/          Stage A calibration, Stage B replay, reports/
-src/main.py            scheduler entrypoint
-tests/
-docker/
-```
-
-## Data
-
-- **tennis-data.co.uk** — results + bookmaker odds (PSW/PSL = Pinnacle).
-  Cloudflare blocks scripted downloads; fetch manually from
-  `alldata.php?year=YYYY&file=atp|wta` into `data/raw/tennis_data/`.
-- **Sackmann data** — original repos went 404 in Oct 2026; we use the archive
-  mirror `Aneeshers/tennis-sackmann-archive` (CC BY-NC-SA, non-commercial only).
-  Already downloaded under `data/raw/sackmann/` (gitignored).
-
-## Status
+## Roadmap status
 
 | Phase | Status |
 |---|---|
-| 1. Data + Stage A calibration | Done for ATP 2020–2025 (report in `src/backtest/reports/`); WTA + 2015–2019 pending tennis-data downloads |
-| 2. Fair value + matching | De-vig, linker ([docs](docs/event-matching.md)), and surface Elo done; needs API adapters, aliases file, and 200-match accuracy check |
-| 3. Paper trading | Not started |
-| 4. Live small | Not started — requires go-live gate in AGENTS.md §11 |
+| 1. Data + calibration | ✅ ATP 2020–25 calibrated ([report](src/backtest/reports/2026-11-10-calibration.md)); WTA pending downloads |
+| 2. Fair value + matching | ✅ De-vig, linker, Elo done — needs live API data for the 200-match check |
+| 3. Paper trading | 🟡 All components built (quoting, paper fills, risk, DB, scheduler) — needs API keys to run the loop |
+| 4. Live small | ⬜ Blocked by go-live gate (≥200 paper trades, positive CLV) |
 
 ## Safety
 
-Live trading is hard-gated: the executor refuses to run unless `MODE=live`
-**and** `I_UNDERSTAND_LIVE_TRADING=yes`. Never commit secrets; `.pem` files
-live outside the repo. Every decision is logged, including no-trades.
+- Live orders require **both** `MODE=live` in config **and**
+  `I_UNDERSTAND_LIVE_TRADING=yes` in env — the executor refuses otherwise
+- Secrets only from env vars; `.pem` keys live outside the repo
+- Every decision logged to the `decisions` table, including skips
+- Kill switch: any risk breach → cancel all, `/tmp/KILL` lock, alert
 
-## Tests
+## Docs
 
-```bash
-.venv/bin/python -m pytest -q
-```
+- [AGENTS.md](AGENTS.md) — full operating manual (strategy, APIs, formulas, risk, phases)
+- [docs/event-matching.md](docs/event-matching.md) — how the linker works
+- `.env.example` — required environment variables
