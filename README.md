@@ -56,6 +56,7 @@ pytest -q
 | `src/db/` | Postgres schema + migrations + repository |
 | `src/backtest/` | Stage A calibration (done) · Stage B replay |
 | `src/main.py` | APScheduler entrypoint — all §12 jobs registered |
+| `src/dashboard/` | Read-only web UI → `python -m src.dashboard.app` → http://127.0.0.1:8080 |
 | `tests/` | 40+ unit/integration tests, no real network calls |
 | `AGENTS.md` | **Operating manual — read before changing anything** |
 

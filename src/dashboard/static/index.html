@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tennis Bot</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --border: #262b36;
+    --text: #e6e8ee; --muted: #8b93a7; --accent: #4f8cff;
+    --green: #3fb96b; --red: #e05d5d; --amber: #e0a93f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px;
+    padding: 14px 20px; border-bottom: 1px solid var(--border);
+    background: var(--panel); position: sticky; top: 0;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  .pill {
+    font-size: 12px; padding: 3px 10px; border-radius: 999px;
+    border: 1px solid var(--border); color: var(--muted);
+  }
+  .pill.paper { color: var(--accent); border-color: var(--accent); }
+  .pill.live { color: var(--green); border-color: var(--green); }
+  .pill.locked { color: var(--red); border-color: var(--red); }
+  .pill.maint { color: var(--amber); border-color: var(--amber); }
+  main { padding: 20px; display: grid; gap: 16px; max-width: 1400px; margin: 0 auto; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 16px;
+  }
+  .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em;
+             color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+  .card .big { font-size: 24px; font-weight: 650; }
+  .pos { color: var(--green); } .neg { color: var(--red); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--muted); font-weight: 600; font-size: 11px;
+       text-transform: uppercase; letter-spacing: .05em; padding: 6px 8px;
+       border-bottom: 1px solid var(--border); }
+  td { padding: 7px 8px; border-bottom: 1px solid var(--border); }
+  tr:last-child td { border-bottom: none; }
+  .empty { color: var(--muted); padding: 18px; text-align: center; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; }
+  .edge-pos { color: var(--green); font-weight: 600; }
+  .edge-neg { color: var(--muted); }
+  #updated { color: var(--muted); font-size: 12px; margin-left: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Tennis Bot</h1>
+  <span class="pill" id="mode">…</span>
+  <span class="pill" id="maint"></span>
+  <span class="pill" id="kill"></span>
+  <span id="updated"></span>
+</header>
+<main>
+  <section class="grid" id="riskcards"></section>
+  <section class="card"><h2>Match board</h2><div id="matches"></div></section>
+  <section class="card"><h2>Open orders</h2><div id="orders"></div></section>
+  <section class="card"><h2>Recent decisions</h2><div id="decisions"></div></section>
+  <section class="card"><h2>Recent fills</h2><div id="fills"></div></section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const fmt$ = v => (v == null ? "—" : (v < 0 ? "-$" : "$") + Math.abs(v).toFixed(2));
+const fmtC = c => (c == null ? "—" : (c/100).toFixed(2));
+const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+async function j(url) { const r = await fetch(url); return r.json(); }
+
+function card(label, value, cls="") {
+  return `<div class="card"><h2>${label}</h2><div class="big ${cls}">${value}</div></div>`;
+}
+
+async function refreshStatus() {
+  const s = await j('/api/status');
+  const mode = $('mode');
+  mode.textContent = s.mode.toUpperCase();
+  mode.className = 'pill ' + (s.mode === 'live' ? 'live' : 'paper');
+  const m = $('maint');
+  m.textContent = s.maintenance_window ? 'MAINTENANCE 3–5 AM ET' : '';
+  m.className = 'pill ' + (s.maintenance_window ? 'maint' : '');
+  const k = $('kill');
+  k.textContent = s.kill_switch_locked ? 'KILL SWITCH LOCKED' : 'kill switch clear';
+  k.className = 'pill ' + (s.kill_switch_locked ? 'locked' : '');
+  $('updated').textContent = 'updated ' + new Date().toLocaleTimeString();
+}
+
+async function refreshRisk() {
+  const r = await j('/api/risk');
+  if (r.error) { $('riskcards').innerHTML = `<div class="empty">${esc(r.error)}</div>`; return; }
+  const pnl = r.daily_realized_pnl;
+  $('riskcards').innerHTML =
+    card('P&L today', fmt$(pnl), pnl >= 0 ? 'pos' : 'neg') +
+    card('Exposure today', fmt$(r.exposure_today)) +
+    card('Open exposure', fmt$(r.open_exposure_total)) +
+    card('Open orders', r.open_orders_count) +
+    card('Matches exposed', Object.keys(r.exposure_per_match).length);
+}
+
+function table(headers, rowsHtml, emptyMsg) {
+  if (!rowsHtml.length) return `<div class="empty">${emptyMsg}</div>`;
+  return `<table><thead><tr>${headers.map(h=>`<th>${h}</th>`).join('')}</tr></thead>
+          <tbody>${rowsHtml.join('')}</tbody></table>`;
+}
+
+async function refreshMatches() {
+  const d = await j('/api/matches');
+  const rows = (d.matches||[]).map(m => {
+    let edge = '';
+    if (m.fair_p1 != null && m.yes_ask_c != null) {
+      const e = (m.fair_p1 - m.yes_ask_c/100);
+      edge = `<span class="${e>0?'edge-pos':'edge-neg'}">${(e*100).toFixed(1)}¢</span>`;
+    } else edge = '—';
+    const conf = m.link_confidence != null ? m.link_confidence.toFixed(2) : '—';
+    return `<tr>
+      <td class="mono">${esc(m.venue_ticker)}</td>
+      <td>${esc(m.yes_player || m.event_ticker || '')}</td>
+      <td>${esc(m.tournament || '')}</td>
+      <td>${m.scheduled_start ? new Date(m.scheduled_start).toLocaleString() : '—'}</td>
+      <td class="mono">${m.yes_bid_c ?? '—'}/${m.yes_ask_c ?? '—'}</td>
+      <td>${m.fair_p1 != null ? (m.fair_p1*100).toFixed(0)+'%' : '—'}</td>
+      <td>${edge}</td>
+      <td>${conf}</td>
+    </tr>`;
+  });
+  $('matches').innerHTML = table(
+    ['Ticker','YES player','Tournament','Start','Bid/Ask','Fair','Edge','Link'],
+    rows, 'No venue markets yet — run discovery jobs');
+}
+
+async function refreshOrders() {
+  const d = await j('/api/orders');
+  const rows = (d.orders||[]).map(o => `<tr>
+    <td class="mono">${esc(o.client_order_id)}</td>
+    <td class="mono">${esc(o.venue_ticker)}</td>
+    <td>${esc(o.side)}/${esc(o.action)}</td>
+    <td class="mono">${fmtC(o.price_c)} × ${o.count}</td>
+    <td>${o.post_only ? 'maker' : 'taker'}</td>
+    <td>${esc(o.status)}</td>
+    <td>${esc(o.mode)}</td>
+  </tr>`);
+  $('orders').innerHTML = table(
+    ['Order','Ticker','Side','Price','Type','Status','Mode'], rows, 'No open orders');
+}
+
+async function refreshDecisions() {
+  const d = await j('/api/decisions?limit=50');
+  const rows = (d.decisions||[]).map(x => `<tr>
+    <td class="mono">${new Date(x.ts).toLocaleTimeString()}</td>
+    <td class="mono">${esc(x.venue_ticker||'')}</td>
+    <td>${esc(x.side||'')}</td>
+    <td class="mono">${x.fair_p!=null?(x.fair_p*100).toFixed(0)+'%':'—'}</td>
+    <td class="mono">${x.price_c!=null?fmtC(x.price_c):'—'}</td>
+    <td class="mono">${x.edge!=null?(x.edge*100).toFixed(1)+'¢':'—'}</td>
+    <td>${esc(x.action)}</td>
+    <td class="mono">${esc(x.reason||'')}</td>
+    <td>${esc(x.mode)}</td>
+  </tr>`);
+  $('decisions').innerHTML = table(
+    ['Time','Ticker','Side','Fair','Price','Edge','Action','Reason','Mode'],
+    rows, 'No decisions logged yet');
+}
+
+async function refreshFills() {
+  const d = await j('/api/fills?limit=50');
+  const rows = (d.fills||[]).map(f => `<tr>
+    <td class="mono">${new Date(f.ts).toLocaleString()}</td>
+    <td class="mono">${esc(f.venue_ticker)}</td>
+    <td>${esc(f.side)}</td>
+    <td class="mono">${fmtC(f.price_c)} × ${f.count}</td>
+    <td class="mono">${f.fee_cost_c!=null?fmtC(f.fee_cost_c):'—'}</td>
+    <td>${f.is_taker?'taker':'maker'}</td>
+    <td>${esc(f.mode)}</td>
+  </tr>`);
+  $('fills').innerHTML = table(
+    ['Time','Ticker','Side','Price','Fee','Type','Mode'], rows, 'No fills yet');
+}
+
+async function tick() {
+  for (const fn of [refreshStatus, refreshRisk, refreshMatches, refreshOrders, refreshDecisions, refreshFills]) {
+    try { await fn(); } catch(e) { console.error(e); }
+  }
+}
+tick();
+setInterval(tick, 15000);
+setInterval(refreshStatus, 5000);
+</script>
+</body>
+</html>
